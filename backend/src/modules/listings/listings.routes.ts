@@ -4,14 +4,29 @@ import { prisma } from '../../database/prisma';
 import { authenticate, requireVerified } from '../../middleware/auth';
 import { isValidStateTransition, LISTING_STATE_TRANSITIONS } from '../../utils/stateMachine';
 
+const listingQuerySchema = z.object({
+  page: z.string().optional(),
+  limit: z.string().optional(),
+  search: z.string().optional(),
+  categoryId: z.string().optional(),
+  listingType: z.enum(['SELL', 'EXCHANGE', 'GIVE_AWAY', 'BUY_REQUEST']).optional(),
+  condition: z.enum(['NEW', 'LIKE_NEW', 'GOOD', 'FAIR', 'USED']).optional(),
+  minPrice: z.string().optional(),
+  maxPrice: z.string().optional(),
+  location: z.string().optional(),
+  status: z.enum(['ACTIVE', 'RESERVED', 'SOLD', 'EXCHANGED', 'GIVEN_AWAY', 'CLOSED', 'REMOVED']).optional(),
+  sort: z.enum(['newest', 'price_asc', 'price_desc', 'oldest']).optional(),
+  sellerId: z.string().optional(),
+});
+
 const createListingSchema = z.object({
-  title: z.string().min(3).max(100),
-  description: z.string().min(10),
-  categoryId: z.string(),
+  title: z.string().min(3, 'Title must be at least 3 characters').max(100),
+  description: z.string().min(10, 'Description must be at least 10 characters'),
+  categoryId: z.string().min(1, 'Category is required'),
   listingType: z.enum(['SELL', 'EXCHANGE', 'GIVE_AWAY', 'BUY_REQUEST']),
   price: z.number().nullable().optional(),
   condition: z.enum(['NEW', 'LIKE_NEW', 'GOOD', 'FAIR', 'USED']),
-  location: z.string().min(2),
+  location: z.string().min(2, 'Location must be specified'),
   images: z.array(z.string()).min(1, 'At least one image URL is required'),
 });
 
@@ -27,14 +42,16 @@ const updateListingSchema = z.object({
 });
 
 export async function listingRoutes(fastify: FastifyInstance) {
-  // GET /api/listings (Public search & filter with server-side pagination)
+  // GET /api/listings
   fastify.get('/', async (request, reply) => {
-    const query = request.query as any;
-    const page = parseInt(query.page || '1', 10);
-    const limit = Math.min(parseInt(query.limit || '12', 10), 50);
-    const skip = (page - 1) * limit;
+    const parseQuery = listingQuerySchema.safeParse(request.query || {});
+    if (!parseQuery.success) {
+      return reply.status(400).send({ error: 'Validation Error', details: parseQuery.error.errors });
+    }
 
     const {
+      page: pageStr,
+      limit: limitStr,
       search,
       categoryId,
       listingType,
@@ -45,31 +62,21 @@ export async function listingRoutes(fastify: FastifyInstance) {
       status,
       sort,
       sellerId,
-    } = query;
+    } = parseQuery.data;
+
+    const page = parseInt(pageStr || '1', 10);
+    const limit = Math.min(parseInt(limitStr || '12', 10), 50);
+    const skip = (page - 1) * limit;
 
     const where: any = {
       status: status || { not: 'REMOVED' },
     };
 
-    if (sellerId) {
-      where.sellerId = sellerId;
-    }
-
-    if (categoryId) {
-      where.categoryId = categoryId;
-    }
-
-    if (listingType) {
-      where.listingType = listingType;
-    }
-
-    if (condition) {
-      where.condition = condition;
-    }
-
-    if (location) {
-      where.location = { contains: location };
-    }
+    if (sellerId) where.sellerId = sellerId;
+    if (categoryId) where.categoryId = categoryId;
+    if (listingType) where.listingType = listingType;
+    if (condition) where.condition = condition;
+    if (location) where.location = { contains: location };
 
     if (minPrice || maxPrice) {
       where.price = {};
@@ -117,7 +124,7 @@ export async function listingRoutes(fastify: FastifyInstance) {
     });
   });
 
-  // GET /api/listings/saved (Protected - Wishlist)
+  // GET /api/listings/saved
   fastify.get('/saved', { preHandler: [authenticate] }, async (request, reply) => {
     const userId = request.user!.id;
     const wishlists = await prisma.wishlist.findMany({
@@ -160,7 +167,6 @@ export async function listingRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Not Found', message: 'Listing not found' });
     }
 
-    // Optional user context for wishlist state
     let isSaved = false;
     const authHeader = request.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -189,7 +195,6 @@ export async function listingRoutes(fastify: FastifyInstance) {
 
     const { title, description, categoryId, listingType, price, condition, location, images } = parseResult.data;
 
-    // Validate listing type price rules
     if (listingType === 'SELL' && (price === undefined || price === null || price < 0)) {
       return reply.status(400).send({ error: 'Validation Error', message: 'Price is required for SELL listings' });
     }
@@ -236,7 +241,6 @@ export async function listingRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Not Found', message: 'Listing not found' });
     }
 
-    // Ownership & Admin Guard
     const isOwner = listing.sellerId === request.user!.id;
     const isAdmin = request.user!.role === 'ADMIN';
 
@@ -251,7 +255,6 @@ export async function listingRoutes(fastify: FastifyInstance) {
 
     const updates = parseResult.data;
 
-    // Validate status transition if changing status
     if (updates.status && updates.status !== listing.status) {
       if (!isValidStateTransition(listing.status, updates.status, LISTING_STATE_TRANSITIONS)) {
         return reply.status(400).send({
@@ -305,7 +308,7 @@ export async function listingRoutes(fastify: FastifyInstance) {
     return reply.send({ message: 'Listing removed successfully' });
   });
 
-  // POST /api/listings/:id/save (Wishlist save)
+  // POST /api/listings/:id/save
   fastify.post('/:id/save', { preHandler: [authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const userId = request.user!.id;
@@ -330,7 +333,7 @@ export async function listingRoutes(fastify: FastifyInstance) {
     return reply.send({ message: 'Listing saved to wishlist' });
   });
 
-  // DELETE /api/listings/:id/save (Wishlist remove)
+  // DELETE /api/listings/:id/save
   fastify.delete('/:id/save', { preHandler: [authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const userId = request.user!.id;

@@ -5,28 +5,50 @@ import { authenticate, requireVerified } from '../../middleware/auth';
 import { calculateMatchScore } from '../../services/matchingService';
 import { isValidStateTransition, REPORT_STATE_TRANSITIONS } from '../../utils/stateMachine';
 
+const reportQuerySchema = z.object({
+  page: z.string().optional(),
+  limit: z.string().optional(),
+  reportType: z.enum(['LOST', 'FOUND']).optional(),
+  categoryId: z.string().optional(),
+  location: z.string().optional(),
+  search: z.string().optional(),
+  status: z.enum(['LOST', 'FOUND', 'CLAIMED', 'RESOLVED', 'CLOSED']).optional(),
+  reporterId: z.string().optional(),
+});
+
 const createReportSchema = z.object({
   reportType: z.enum(['LOST', 'FOUND']),
   title: z.string().min(3).max(100),
   description: z.string().min(10),
   categoryId: z.string(),
   location: z.string().min(2),
-  dateEvent: z.string(), // ISO date string
+  dateEvent: z.string(),
   approximateTime: z.string().optional(),
   distinguishingAttributes: z.string().optional(),
   visibleAttributes: z.string().optional(),
   images: z.array(z.string()).optional(),
 });
 
+const updateReportSchema = z.object({
+  title: z.string().min(3).max(100).optional(),
+  description: z.string().min(10).optional(),
+  location: z.string().min(2).optional(),
+  status: z.enum(['LOST', 'FOUND', 'CLAIMED', 'RESOLVED', 'CLOSED']).optional(),
+});
+
 export async function lostFoundRoutes(fastify: FastifyInstance) {
   // GET /api/reports
   fastify.get('/', async (request, reply) => {
-    const query = request.query as any;
-    const page = parseInt(query.page || '1', 10);
-    const limit = Math.min(parseInt(query.limit || '12', 10), 50);
-    const skip = (page - 1) * limit;
+    const parseQuery = reportQuerySchema.safeParse(request.query || {});
+    if (!parseQuery.success) {
+      return reply.status(400).send({ error: 'Validation Error', details: parseQuery.error.errors });
+    }
 
-    const { reportType, categoryId, location, search, status, reporterId } = query;
+    const { page: pageStr, limit: limitStr, reportType, categoryId, location, search, status, reporterId } = parseQuery.data;
+
+    const page = parseInt(pageStr || '1', 10);
+    const limit = Math.min(parseInt(limitStr || '12', 10), 50);
+    const skip = (page - 1) * limit;
 
     const where: any = {};
     if (reportType) where.reportType = reportType;
@@ -178,7 +200,12 @@ export async function lostFoundRoutes(fastify: FastifyInstance) {
       return reply.status(403).send({ error: 'Forbidden', message: 'Unauthorized to edit this report' });
     }
 
-    const { status, title, description, location } = (request.body as any) || {};
+    const parseResult = updateReportSchema.safeParse(request.body || {});
+    if (!parseResult.success) {
+      return reply.status(400).send({ error: 'Validation Error', details: parseResult.error.errors });
+    }
+
+    const { status, title, description, location } = parseResult.data;
 
     if (status && status !== report.status) {
       if (!isValidStateTransition(report.status, status, REPORT_STATE_TRANSITIONS)) {
@@ -203,7 +230,7 @@ export async function lostFoundRoutes(fastify: FastifyInstance) {
     return reply.send({ message: 'Report updated', report: updated });
   });
 
-  // GET /api/reports/:id/matches (Scored matching engine)
+  // GET /api/reports/:id/matches
   fastify.get('/:id/matches', async (request, reply) => {
     const { id } = request.params as { id: string };
     const sourceReport = await prisma.lostFoundReport.findUnique({
@@ -215,7 +242,6 @@ export async function lostFoundRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Not Found', message: 'Report not found' });
     }
 
-    // Target reports are opposite reportType (e.g. LOST matches with FOUND, and vice versa)
     const targetType = sourceReport.reportType === 'LOST' ? 'FOUND' : 'LOST';
 
     const potentialCandidates = await prisma.lostFoundReport.findMany({

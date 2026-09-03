@@ -4,7 +4,7 @@ import { prisma } from '../../database/prisma';
 import { authenticate } from '../../middleware/auth';
 
 const createConversationSchema = z.object({
-  recipientId: z.string(),
+  recipientId: z.string().uuid().or(z.string().min(1)),
   listingId: z.string().optional(),
 });
 
@@ -13,7 +13,7 @@ const sendMessageSchema = z.object({
 });
 
 export async function messagingRoutes(fastify: FastifyInstance) {
-  // GET /api/conversations (List user's active conversations)
+  // GET /api/conversations (List user's active conversations - EFFICIENT BATCHED QUERY)
   fastify.get('/conversations', { preHandler: [authenticate] }, async (request, reply) => {
     const userId = request.user!.id;
 
@@ -33,27 +33,39 @@ export async function messagingRoutes(fastify: FastifyInstance) {
       orderBy: { updatedAt: 'desc' },
     });
 
-    const formatted = await Promise.all(
-      conversations.map(async conv => {
-        const partner = conv.participant1Id === userId ? conv.participant2 : conv.participant1;
-        const unreadCount = await prisma.message.count({
-          where: {
-            conversationId: conv.id,
-            senderId: partner.id,
-            isRead: false,
-          },
-        });
+    if (conversations.length === 0) {
+      return reply.send({ conversations: [] });
+    }
 
-        return {
-          id: conv.id,
-          listing: conv.listing,
-          partner,
-          lastMessage: conv.messages[0] || null,
-          unreadCount,
-          updatedAt: conv.updatedAt,
-        };
-      })
-    );
+    const conversationIds = conversations.map(c => c.id);
+
+    // Batch fetch unread counts in single query (Eliminating N+1 queries)
+    const unreadGroups = await prisma.message.groupBy({
+      by: ['conversationId'],
+      where: {
+        conversationId: { in: conversationIds },
+        senderId: { not: userId },
+        isRead: false,
+      },
+      _count: { id: true },
+    });
+
+    const unreadMap = new Map<string, number>();
+    for (const group of unreadGroups) {
+      unreadMap.set(group.conversationId, group._count.id);
+    }
+
+    const formatted = conversations.map(conv => {
+      const partner = conv.participant1Id === userId ? conv.participant2 : conv.participant1;
+      return {
+        id: conv.id,
+        listing: conv.listing,
+        partner,
+        lastMessage: conv.messages[0] || null,
+        unreadCount: unreadMap.get(conv.id) || 0,
+        updatedAt: conv.updatedAt,
+      };
+    });
 
     return reply.send({ conversations: formatted });
   });
@@ -77,7 +89,7 @@ export async function messagingRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'Not Found', message: 'Recipient user does not exist' });
     }
 
-    // Sort participant IDs deterministically to match unique constraints
+    // Sort participant IDs deterministically
     const [p1, p2] = [userId, recipientId].sort();
 
     let conversation = await prisma.conversation.findFirst({
@@ -120,7 +132,7 @@ export async function messagingRoutes(fastify: FastifyInstance) {
     });
   });
 
-  // GET /api/conversations/:id/messages (Fetch history)
+  // GET /api/conversations/:id/messages (Fetch history & mark read)
   fastify.get('/conversations/:id/messages', { preHandler: [authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const userId = request.user!.id;
@@ -134,7 +146,6 @@ export async function messagingRoutes(fastify: FastifyInstance) {
       return reply.status(403).send({ error: 'Forbidden', message: 'You are not a participant in this conversation' });
     }
 
-    // Mark partner's unread messages as read
     await prisma.message.updateMany({
       where: { conversationId: id, senderId: { not: userId }, isRead: false },
       data: { isRead: true },
@@ -186,10 +197,8 @@ export async function messagingRoutes(fastify: FastifyInstance) {
       }),
     ]);
 
-    // Recipient user ID
     const recipientId = conversation.participant1Id === userId ? conversation.participant2Id : conversation.participant1Id;
 
-    // Create Notification for recipient
     await prisma.notification.create({
       data: {
         userId: recipientId,
@@ -200,7 +209,6 @@ export async function messagingRoutes(fastify: FastifyInstance) {
       },
     });
 
-    // Realtime Socket broadcast if server has io attached
     if ((fastify as any).io) {
       (fastify as any).io.to(`user:${recipientId}`).emit('message:received', message);
     }

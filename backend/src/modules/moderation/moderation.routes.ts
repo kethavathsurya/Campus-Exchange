@@ -17,7 +17,7 @@ const adminReportActionSchema = z.object({
 
 export async function moderationRoutes(fastify: FastifyInstance) {
   // POST /api/moderation/reports (Students report content)
-  fastify.post('/reports', { preHandler: [authenticate] }, async (request, reply) => {
+  fastify.post('/moderation/reports', { preHandler: [authenticate] }, async (request, reply) => {
     const parseResult = createContentReportSchema.safeParse(request.body);
     if (!parseResult.success) {
       return reply.status(400).send({ error: 'Validation Error', details: parseResult.error.errors });
@@ -39,7 +39,7 @@ export async function moderationRoutes(fastify: FastifyInstance) {
     return reply.status(201).send({ message: 'Content report submitted for moderation review', report });
   });
 
-  // GET /api/admin/reports (Admin only - view reports queue)
+  // GET /api/admin/reports (Admin only)
   fastify.get('/admin/reports', { preHandler: [requireAdmin] }, async (request, reply) => {
     const reports = await prisma.contentReport.findMany({
       include: {

@@ -31,6 +31,9 @@ model User {
   notifications     Notification[]
   contentReports    ContentReport[]   @relation("ReporterReports")
   moderationActions ModerationAction[]@relation("AdminActions")
+
+  @@index([email])
+  @@index([role])
 }
 
 model Category {
@@ -42,6 +45,8 @@ model Category {
 
   listings    Listing[]
   reports     LostFoundReport[]
+
+  @@index([slug])
 }
 
 model Listing {
@@ -64,6 +69,12 @@ model Listing {
   wishlists   Wishlist[]
   reservations Reservation[]
   conversations Conversation[]
+
+  @@index([status])
+  @@index([categoryId])
+  @@index([sellerId])
+  @@index([listingType])
+  @@index([createdAt])
 }
 
 model ListingImage {
@@ -74,6 +85,8 @@ model ListingImage {
   createdAt DateTime @default(now())
 
   listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId])
 }
 
 model Wishlist {
@@ -86,6 +99,8 @@ model Wishlist {
   listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
 
   @@unique([userId, listingId])
+  @@index([userId])
+  @@index([listingId])
 }
 
 model Reservation {
@@ -99,6 +114,10 @@ model Reservation {
 
   listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
   buyer     User     @relation("BuyerReservations", fields: [buyerId], references: [id], onDelete: Cascade)
+
+  @@index([listingId])
+  @@index([buyerId])
+  @@index([status])
 }
 
 model Conversation {
@@ -115,6 +134,9 @@ model Conversation {
   messages      Message[]
 
   @@unique([listingId, participant1Id, participant2Id])
+  @@index([participant1Id])
+  @@index([participant2Id])
+  @@index([updatedAt])
 }
 
 model Message {
@@ -127,6 +149,11 @@ model Message {
 
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User         @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([senderId])
+  @@index([isRead])
+  @@index([createdAt])
 }
 
 model LostFoundReport {
@@ -149,6 +176,12 @@ model LostFoundReport {
   category                Category      @relation(fields: [categoryId], references: [id])
   images                  ReportImage[]
   claims                  Claim[]
+
+  @@index([reportType])
+  @@index([status])
+  @@index([categoryId])
+  @@index([reporterId])
+  @@index([createdAt])
 }
 
 model ReportImage {
@@ -158,6 +191,8 @@ model ReportImage {
   createdAt DateTime        @default(now())
 
   report    LostFoundReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId])
 }
 
 model Claim {
@@ -173,6 +208,10 @@ model Claim {
 
   report               LostFoundReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
   claimant             User            @relation("ClaimantClaims", fields: [claimantId], references: [id], onDelete: Cascade)
+
+  @@index([reportId])
+  @@index([claimantId])
+  @@index([status])
 }
 
 model Notification {
@@ -186,6 +225,9 @@ model Notification {
   createdAt DateTime @default(now())
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
 }
 
 model ContentReport {
@@ -200,6 +242,9 @@ model ContentReport {
 
   reporter    User     @relation("ReporterReports", fields: [reporterId], references: [id], onDelete: Cascade)
   actions     ModerationAction[]
+
+  @@index([status])
+  @@index([contentType, targetId])
 }
 
 model ModerationAction {
@@ -212,4 +257,6 @@ model ModerationAction {
 
   admin           User           @relation("AdminActions", fields: [adminId], references: [id], onDelete: Cascade)
   contentReport   ContentReport? @relation(fields: [contentReportId], references: [id], onDelete: SetNull)
+
+  @@index([adminId])
 }
