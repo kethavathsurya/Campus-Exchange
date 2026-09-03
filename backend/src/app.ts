@@ -14,6 +14,7 @@ import { notificationRoutes } from './modules/notifications/notifications.routes
 import { moderationRoutes } from './modules/moderation/moderation.routes';
 import { saveUploadedFile, ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES } from './services/storageService';
 import { authenticate } from './middleware/auth';
+import { uploadRateLimiter } from './middleware/rateLimit';
 
 export function buildApp() {
   const fastify = Fastify({
@@ -51,8 +52,8 @@ export function buildApp() {
     return { categories };
   });
 
-  // Image Upload endpoint
-  fastify.post('/api/upload', { preHandler: [authenticate] }, async (request, reply) => {
+  // Image Upload endpoint (Authenticated & Rate-limited)
+  fastify.post('/api/upload', { preHandler: [authenticate, uploadRateLimiter] }, async (request, reply) => {
     const data = await request.file();
     if (!data) {
       return reply.status(400).send({ error: 'Bad Request', message: 'No file uploaded' });

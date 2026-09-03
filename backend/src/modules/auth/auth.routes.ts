@@ -4,36 +4,36 @@ import { z } from 'zod';
 import { prisma } from '../../database/prisma';
 import { signToken } from '../../utils/jwt';
 import { authenticate } from '../../middleware/auth';
+import { authRateLimiter } from '../../middleware/rateLimit';
 
 const registerSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(6),
-  name: z.string().min(2),
+  password: z.string().min(6, 'Password must be at least 6 characters'),
+  name: z.string().min(2, 'Name must be at least 2 characters'),
   department: z.string().optional(),
 });
 
 const loginSchema = z.object({
   email: z.string().email(),
-  password: z.string(),
+  password: z.string().min(1, 'Password is required'),
 });
 
 const verifySchema = z.object({
   email: z.string().email(),
-  verificationToken: z.string(),
+  verificationToken: z.string().min(1, 'Verification token is required'),
 });
 
 export async function authRoutes(fastify: FastifyInstance) {
-  // POST /api/auth/register
-  fastify.post('/register', async (request, reply) => {
+  // POST /api/auth/register (Rate-limited)
+  fastify.post('/register', { preHandler: [authRateLimiter] }, async (request, reply) => {
     const parseResult = registerSchema.safeParse(request.body);
     if (!parseResult.success) {
       return reply.status(400).send({ error: 'Validation Error', details: parseResult.error.errors });
     }
 
     const { email, password, name, department } = parseResult.data;
-
-    // Check institutional email pattern (.edu or @campus / @univ or dev environment override)
     const lowerEmail = email.toLowerCase();
+
     const isCampusEmail = lowerEmail.endsWith('.edu') || lowerEmail.includes('campus') || lowerEmail.includes('univ') || lowerEmail.endsWith('@student.org');
     
     if (!isCampusEmail) {
@@ -49,10 +49,8 @@ export async function authRoutes(fastify: FastifyInstance) {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    // Development verification code: simple 6-digit pin or string token
     const verificationToken = Math.floor(100000 + Math.random() * 900000).toString();
 
-    // First registered user gets ADMIN role for convenience, others STUDENT
     const userCount = await prisma.user.count();
     const role = userCount === 0 ? 'ADMIN' : 'STUDENT';
 
@@ -77,12 +75,12 @@ export async function authRoutes(fastify: FastifyInstance) {
         role: user.role,
         isVerified: user.isVerified,
       },
-      devVerificationToken: user.verificationToken, // Provided for instant local dev evaluation
+      devVerificationToken: user.verificationToken,
     });
   });
 
-  // POST /api/auth/verify
-  fastify.post('/verify', async (request, reply) => {
+  // POST /api/auth/verify (Rate-limited)
+  fastify.post('/verify', { preHandler: [authRateLimiter] }, async (request, reply) => {
     const parseResult = verifySchema.safeParse(request.body);
     if (!parseResult.success) {
       return reply.status(400).send({ error: 'Validation Error', details: parseResult.error.errors });
@@ -124,8 +122,8 @@ export async function authRoutes(fastify: FastifyInstance) {
     });
   });
 
-  // POST /api/auth/login
-  fastify.post('/login', async (request, reply) => {
+  // POST /api/auth/login (Rate-limited)
+  fastify.post('/login', { preHandler: [authRateLimiter] }, async (request, reply) => {
     const parseResult = loginSchema.safeParse(request.body);
     if (!parseResult.success) {
       return reply.status(400).send({ error: 'Validation Error', details: parseResult.error.errors });
